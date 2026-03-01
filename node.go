@@ -23,6 +23,10 @@ func (n BNode) nKeys() uint16 {
 	return binary.LittleEndian.Uint16(n[2:4])
 }
 
+func (n BNode) nBytes() uint16 {
+	return n.kvPos(n.nKeys())
+}
+
 // read child pointers array
 func (n BNode) getPtr(idx uint16) uint64 {
 	if n.bType() != BNodeNode {
