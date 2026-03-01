@@ -5,6 +5,45 @@ import (
 	"sort"
 )
 
+type BTree struct {
+	root uint64
+	get  func(uint64) []byte
+	new  func([]byte) uint64
+	del  func(uint64)
+}
+
+func treeInsert(tree *BTree, node BNode, key, val []byte) BNode {
+	newNode := BNode(make([]byte, 2*BTreePageSize))
+	idx := nodeLookupLE(node, key)
+	switch node.bType() {
+	case BNodeLeaf:
+		if bytes.Equal(key, node.getKey(idx)) {
+			leafUpdate(newNode, node, idx, key, val)
+		} else {
+			leafInsert(newNode, node, idx+1, key, val)
+		}
+	case BNodeNode:
+		kPtr := node.getPtr(idx)
+		kNode := treeInsert(tree, tree.get(kPtr), key, val)
+		nSplit, split := nodeSplit3(kNode)
+		tree.del(kPtr)
+		nodeReplaceKidN(tree, newNode, node, idx, split[:nSplit]...)
+	default:
+		panic("bad node type:")
+	}
+	return newNode
+}
+
+func nodeReplaceKidN(tree *BTree, newNode, old BNode, idx uint16, kids ...BNode) {
+	inc := uint16(len(kids))
+	newNode.setHeader(BNodeNode, old.nKeys()+inc-1)
+	nodeAppendRange(newNode, old, 0, 0, idx)
+	for i, node := range kids {
+		nodeAppendKV(newNode, idx+uint16(i), tree.new(node), node.getKey(0), nil)
+	}
+	nodeAppendRange(newNode, old, idx+inc, idx+1, old.nKeys()-(idx+1))
+}
+
 func leafInsert(newNode, oldNode BNode, idx uint16, key, val []byte) {
 	newNode.setHeader(BNodeLeaf, oldNode.nKeys()+1)
 	nodeAppendRange(newNode, oldNode, 0, 0, idx)
