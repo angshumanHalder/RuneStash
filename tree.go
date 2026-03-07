@@ -138,15 +138,22 @@ func leafUpdate(newNode, oldNode BNode, idx uint16, key, val []byte) {
 func nodeLookupLE(node BNode, key []byte) uint16 {
 	nKeys := node.nKeys()
 	found := sort.Search(int(nKeys), func(i int) bool {
-		return bytes.Compare(key, node.getKey(uint16(i))) > 0
+		return bytes.Compare(node.getKey(uint16(i)), key) > 0
 	})
-	return uint16(found - 1)
+	if found > 0 {
+		return uint16(found - 1)
+	}
+	return 0
 }
 
 func nodeAppendRange(newNode, oldNode BNode, dstNew, srcOld, n uint16) {
 	for i := uint16(0); i < n; i++ {
 		dst, src := dstNew+i, srcOld+i
-		nodeAppendKV(newNode, dst, oldNode.getPtr(srcOld), oldNode.getKey(src), oldNode.getVal(src))
+		var ptr uint64
+		if oldNode.bType() == BNodeNode {
+			ptr = oldNode.getPtr(src)
+		}
+		nodeAppendKV(newNode, dst, ptr, oldNode.getKey(src), oldNode.getVal(src))
 	}
 }
 
@@ -166,7 +173,7 @@ func nodeSplit2(left, right, old BNode) {
 		panic("nodeSplit2: cannot split a node with less than 1 key!")
 	}
 	rightBytes := func() uint16 {
-		return old.nBytes() - leftBytes()
+		return old.nBytes() - leftBytes() + HeaderSize
 	}
 	for rightBytes() > BTreePageSize {
 		nLeft++
@@ -177,8 +184,8 @@ func nodeSplit2(left, right, old BNode) {
 	nRight := old.nKeys() - nLeft
 
 	// new nodes
-	left.setHeader(BNodeNode, nLeft)
-	right.setHeader(BNodeNode, nRight)
+	left.setHeader(old.bType(), nLeft)
+	right.setHeader(old.bType(), nRight)
 	nodeAppendRange(left, old, 0, 0, nLeft)
 	nodeAppendRange(right, old, 0, nLeft, nRight)
 
@@ -188,7 +195,7 @@ func nodeSplit2(left, right, old BNode) {
 }
 
 func nodeSplit3(old BNode) (uint16, [3]BNode) {
-	if old.nKeys() <= BTreePageSize {
+	if old.nBytes() <= BTreePageSize {
 		old = old[:BTreePageSize]
 		return 1, [3]BNode{old} // no split
 	}
@@ -210,13 +217,13 @@ func nodeSplit3(old BNode) (uint16, [3]BNode) {
 func leafDelete(newNode, oldNode BNode, idx uint16) {
 	newNode.setHeader(BNodeLeaf, oldNode.nKeys()-1)
 	nodeAppendRange(newNode, oldNode, 0, 0, idx)
-	nodeAppendRange(newNode, oldNode, idx+1, idx, oldNode.nKeys()-(idx+1))
+	nodeAppendRange(newNode, oldNode, idx, idx+1, oldNode.nKeys()-(idx+1))
 }
 
 func nodeMerge(newNode, left, right BNode) {
-	newNode.setHeader(BNodeNode, left.nKeys()+right.nKeys())
+	newNode.setHeader(left.bType(), left.nKeys()+right.nKeys())
 	nodeAppendRange(newNode, left, 0, 0, left.nKeys())
-	nodeAppendRange(newNode, right, 0, 0, right.nKeys())
+	nodeAppendRange(newNode, right, left.nKeys(), 0, right.nKeys())
 }
 
 func nodeReplace2Kid(newNode, oldNode BNode, idx uint16, ptr uint64, key []byte) {
