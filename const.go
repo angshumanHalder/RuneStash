@@ -9,3 +9,4 @@ const HeaderSize = 4
 const BTreePageSize = 4096
 const BTreeMaxKeySize = 1000
 const BTreeMaxValSize = 3000
+const DBSig = "RuneStash"

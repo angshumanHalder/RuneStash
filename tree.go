@@ -73,6 +73,13 @@ func (tree *BTree) Delete(key []byte) (bool, error) {
 	return true, nil
 }
 
+func (tree *BTree) Get(key []byte) ([]byte, bool) {
+	if tree.root == 0 {
+		return nil, false
+	}
+	return treeGet(tree, tree.get(tree.root), key)
+}
+
 func checkLimit(key, val []byte) error {
 	if len(key) == 0 {
 		return errors.New("key is empty")
@@ -303,6 +310,22 @@ func treeDelete(tree *BTree, node BNode, key []byte) BNode {
 		return newNode
 	case BNodeNode:
 		return nodeDelete(tree, node, idx, key)
+	default:
+		panic("bad node type")
+	}
+}
+
+func treeGet(tree *BTree, nodeData []byte, key []byte) ([]byte, bool) {
+	node := BNode(nodeData)
+	idx := nodeLookupLE(node, key)
+	switch node.bType() {
+	case BNodeLeaf:
+		if bytes.Equal(key, node.getKey(idx)) {
+			return node.getVal(idx), true
+		}
+		return nil, false
+	case BNodeNode:
+		return treeGet(tree, tree.get(node.getPtr(idx)), key)
 	default:
 		panic("bad node type")
 	}
