@@ -17,6 +17,7 @@ type Pager struct {
 	}
 	page struct {
 		flushed uint64
+		updates map[uint64][]byte
 		temp    [][]byte
 	}
 }
@@ -40,6 +41,18 @@ func (p *Pager) extendMmap(size int) error {
 }
 
 func (p *Pager) writePages() error {
+	for ptr, data := range p.page.updates {
+		offset := int64(ptr * BTreePageSize)
+		if _, err := syscall.Pwrite(p.fd, data, offset); err != nil {
+			return fmt.Errorf("pwrite update: %w", err)
+		}
+	}
+
+	p.page.updates = nil
+	if len(p.page.temp) == 0 {
+		return nil
+	}
+
 	size := (int(p.page.flushed) + len(p.page.temp)) * BTreePageSize
 	if err := p.extendMmap(size); err != nil {
 		return err
@@ -54,6 +67,13 @@ func (p *Pager) writePages() error {
 }
 
 func (p *Pager) pageRead(ptr uint64) []byte {
+	if node, ok := p.page.updates[ptr]; ok {
+		return node
+	}
+	return p.pageReadFile(ptr)
+}
+
+func (p *Pager) pageReadFile(ptr uint64) []byte {
 	if ptr >= p.page.flushed {
 		idx := ptr - p.page.flushed
 		if idx < uint64(len(p.page.temp)) {
@@ -71,6 +91,26 @@ func (p *Pager) pageRead(ptr uint64) []byte {
 		start = end
 	}
 	panic("pageRead: page not found")
+}
+
+func (p *Pager) pageWrite(ptr uint64) []byte {
+	if ptr >= p.page.flushed {
+		idx := ptr - p.page.flushed
+		if idx < uint64(len(p.page.temp)) {
+			return p.page.temp[idx]
+		}
+		panic("pageWrite: temp page not found")
+	}
+	if p.page.updates == nil {
+		p.page.updates = make(map[uint64][]byte)
+	}
+	if node, ok := p.page.updates[ptr]; ok {
+		return node
+	}
+	node := make([]byte, BTreePageSize)
+	copy(node, p.pageReadFile(ptr))
+	p.page.updates[ptr] = node
+	return node
 }
 
 func (p *Pager) pageAppend(node []byte) uint64 {

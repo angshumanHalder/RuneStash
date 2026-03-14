@@ -10,15 +10,22 @@ type KV struct {
 	tree   BTree
 	pager  *Pager
 	meta   Meta
+	free   FreeList
 	failed bool
 }
 
 func (db *KV) Open() error {
-	db.pager = &Pager{}
+	db.pager = &Pager{
+		fd: -1,
+	}
 
 	db.tree.get = db.pager.pageRead
-	db.tree.new = db.pager.pageAppend
-	db.tree.del = func(uint64) {}
+	db.tree.new = db.pageAlloc
+	db.tree.del = db.free.PushTail
+
+	db.free.get = db.pager.pageRead
+	db.free.new = db.pager.pageAppend
+	db.free.set = db.pager.pageWrite
 
 	fd, err := createFileSync(db.Path)
 	if err != nil {
@@ -106,7 +113,14 @@ func updateOrRevert(db *KV, data []byte) error {
 		db.pager.page.flushed = db.meta.Flushed
 		db.tree.root = db.meta.Root
 
+		db.free.headPage = db.meta.FreeListHead
+		db.free.tailPage = db.meta.FreeListTail
+		db.free.headSeq = db.meta.FreeListHeadSeq
+		db.free.tailSeq = db.meta.FreeListTailSeq
+		db.free.maxSeq = db.meta.FreeListTailSeq
+
 		db.pager.page.temp = db.pager.page.temp[:0]
+		db.pager.page.updates = nil
 	}
 	return err
 }
@@ -121,12 +135,15 @@ func updateFile(db *KV) error {
 	if err := updateRoot(db); err != nil {
 		return err
 	}
+	db.free.SetMaxSeq()
 	return syscall.Fsync(db.pager.fd)
 }
 
 func readRoot(db *KV, fileSize int64) error {
 	if fileSize == 0 {
-		db.pager.page.flushed = 1
+		db.pager.page.flushed = 2
+		db.free.headPage = 1
+		db.free.tailPage = 1
 		return nil
 	}
 	data := db.pager.mmap.chunks[0]
@@ -135,6 +152,12 @@ func readRoot(db *KV, fileSize int64) error {
 	// sync meta to pager and tree
 	db.pager.page.flushed = db.meta.Flushed
 	db.tree.root = db.meta.Root
+
+	db.free.headPage = db.meta.FreeListHead
+	db.free.tailPage = db.meta.FreeListTail
+	db.free.headSeq = db.meta.FreeListHeadSeq
+	db.free.tailSeq = db.meta.FreeListTailSeq
+	db.free.maxSeq = db.meta.FreeListTailSeq
 
 	// verify the page
 	// 1. check alignment
@@ -160,9 +183,25 @@ func updateRoot(db *KV) error {
 	// update meta with current state before saving
 	db.meta.Root = db.tree.root
 	db.meta.Flushed = db.pager.page.flushed
+	db.meta.FreeListHead = db.free.headPage
+	db.meta.FreeListTail = db.free.tailPage
+	db.meta.FreeListHeadSeq = db.free.headSeq
+	db.meta.FreeListTailSeq = db.free.tailSeq
 
 	if _, err := syscall.Pwrite(db.pager.fd, db.meta.save(), 0); err != nil {
 		return fmt.Errorf("updateRoot: %w", err)
 	}
 	return nil
+}
+
+func (db *KV) pageAlloc(node []byte) uint64 {
+	if ptr := db.free.PopHead(); ptr != 0 {
+		if db.pager.page.updates == nil {
+			db.pager.page.updates = make(map[uint64][]byte)
+		}
+		db.pager.page.updates[ptr] = node
+		return ptr
+	}
+
+	return db.pager.pageAppend(node)
 }

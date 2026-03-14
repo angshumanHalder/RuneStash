@@ -10,3 +10,5 @@ const BTreePageSize = 4096
 const BTreeMaxKeySize = 1000
 const BTreeMaxValSize = 3000
 const DBSig = "RuneStash"
+const FreeListHeader = 8
+const FreeListCap = (BTreePageSize - FreeListHeader) / 8

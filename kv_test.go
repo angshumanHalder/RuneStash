@@ -20,8 +20,8 @@ func TestKV_LifeCycle(t *testing.T) {
 		t.Errorf("Expected a valid file descriptor, got -1")
 	}
 
-	if db.pager.page.flushed != 1 {
-		t.Errorf("Expected page.flushed to be 1 (Page 0 reserved), got %d", db.pager.page.flushed)
+	if db.pager.page.flushed != 2 {
+		t.Errorf("Expected page.flushed to be 2 (Page 0 reserved), got %d", db.pager.page.flushed)
 	}
 
 	if len(db.pager.mmap.chunks) != 0 {
@@ -72,15 +72,15 @@ func TestKV_Persistence(t *testing.T) {
 	}
 	defer db2.Close()
 
-	if db2.tree.root != 1 {
+	if db2.tree.root != 2 {
 		t.Errorf("Expected root to be 1, got %d", db2.tree.root)
 	}
 
-	if db2.pager.page.flushed != 2 {
+	if db2.pager.page.flushed != 3 {
 		t.Errorf("Expected 2 pages to be flushed (Meta + Node), got %d", db2.pager.page.flushed)
 	}
 
-	readNode := db2.pager.pageRead(1)
+	readNode := db2.pager.pageRead(2)
 	if string(readNode[:15]) != "Hello RuneStash" {
 		t.Errorf("Expected node to be 'Hello RuneStash', got %s", readNode[:15])
 	}
