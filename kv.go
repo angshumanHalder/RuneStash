@@ -119,7 +119,7 @@ func updateOrRevert(db *KV, data []byte) error {
 		db.free.tailSeq = db.meta.FreeListTailSeq
 		db.free.maxSeq = db.meta.FreeListTailSeq
 
-		db.pager.page.temp = db.pager.page.temp[:0]
+		db.pager.page.nAppend = 0
 		db.pager.page.updates = nil
 	}
 	return err
