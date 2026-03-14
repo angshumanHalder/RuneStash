@@ -79,7 +79,7 @@ func (p *Pager) pageReadFile(ptr uint64) []byte {
 		if idx < uint64(len(p.page.temp)) {
 			return p.page.temp[idx]
 		}
-		panic("pageRead: temp page not found")
+		panic("pageReadFile: temp page not found")
 	}
 	start := uint64(0)
 	for _, chunk := range p.mmap.chunks {
@@ -90,7 +90,7 @@ func (p *Pager) pageReadFile(ptr uint64) []byte {
 		}
 		start = end
 	}
-	panic("pageRead: page not found")
+	panic("pageReadFile: page not found")
 }
 
 func (p *Pager) pageWrite(ptr uint64) []byte {
