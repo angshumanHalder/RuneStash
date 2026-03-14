@@ -107,17 +107,7 @@ func updateOrRevert(db *KV, data []byte) error {
 	// revert on error
 	if err != nil {
 		db.failed = true
-		db.meta.load(data)
-
-		// sync reverted meta back to pager and tree
-		db.pager.page.flushed = db.meta.Flushed
-		db.tree.root = db.meta.Root
-
-		db.free.headPage = db.meta.FreeListHead
-		db.free.tailPage = db.meta.FreeListTail
-		db.free.headSeq = db.meta.FreeListHeadSeq
-		db.free.tailSeq = db.meta.FreeListTailSeq
-		db.free.maxSeq = db.meta.FreeListTailSeq
+		db.sync(data)
 
 		db.pager.page.nAppend = 0
 		db.pager.page.updates = nil
@@ -147,17 +137,7 @@ func readRoot(db *KV, fileSize int64) error {
 		return nil
 	}
 	data := db.pager.mmap.chunks[0]
-	db.meta.load(data)
-
-	// sync meta to pager and tree
-	db.pager.page.flushed = db.meta.Flushed
-	db.tree.root = db.meta.Root
-
-	db.free.headPage = db.meta.FreeListHead
-	db.free.tailPage = db.meta.FreeListTail
-	db.free.headSeq = db.meta.FreeListHeadSeq
-	db.free.tailSeq = db.meta.FreeListTailSeq
-	db.free.maxSeq = db.meta.FreeListTailSeq
+	db.sync(data)
 
 	// verify the page
 	// 1. check alignment
@@ -204,4 +184,18 @@ func (db *KV) pageAlloc(node []byte) uint64 {
 	}
 
 	return db.pager.pageAppend(node)
+}
+
+func (db *KV) sync(data []byte) {
+	db.meta.load(data)
+
+	// sync meta to pager and tree
+	db.pager.page.flushed = db.meta.Flushed
+	db.tree.root = db.meta.Root
+
+	db.free.headPage = db.meta.FreeListHead
+	db.free.tailPage = db.meta.FreeListTail
+	db.free.headSeq = db.meta.FreeListHeadSeq
+	db.free.tailSeq = db.meta.FreeListTailSeq
+	db.free.maxSeq = db.meta.FreeListTailSeq
 }
