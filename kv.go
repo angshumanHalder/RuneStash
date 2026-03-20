@@ -14,130 +14,130 @@ type KV struct {
 	failed bool
 }
 
-func (db *KV) Open() error {
-	db.pager = &Pager{
+func (kv *KV) Open() error {
+	kv.pager = &Pager{
 		fd: -1,
 	}
 
-	db.tree.get = db.pager.pageRead
-	db.tree.new = db.pageAlloc
-	db.tree.del = db.free.PushTail
+	kv.tree.get = kv.pager.pageRead
+	kv.tree.new = kv.pageAlloc
+	kv.tree.del = kv.free.PushTail
 
-	db.free.get = db.pager.pageRead
-	db.free.new = db.pager.pageAppend
-	db.free.set = db.pager.pageWrite
+	kv.free.get = kv.pager.pageRead
+	kv.free.new = kv.pager.pageAppend
+	kv.free.set = kv.pager.pageWrite
 
-	fd, err := createFileSync(db.Path)
+	fd, err := createFileSync(kv.Path)
 	if err != nil {
 		return err
 	}
-	db.pager.fd = fd
+	kv.pager.fd = fd
 	var stat syscall.Stat_t
-	if err = syscall.Fstat(db.pager.fd, &stat); err != nil {
+	if err = syscall.Fstat(kv.pager.fd, &stat); err != nil {
 		return fmt.Errorf("stat File: %w", err)
 	}
 	fileSize := stat.Size
-	if err = db.pager.extendMmap(int(fileSize)); err != nil {
+	if err = kv.pager.extendMmap(int(fileSize)); err != nil {
 		return err
 	}
-	if err = readRoot(db, fileSize); err != nil {
+	if err = readRoot(kv, fileSize); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (db *KV) Close() error {
+func (kv *KV) Close() error {
 	var er error
-	for _, chunk := range db.pager.mmap.chunks {
+	for _, chunk := range kv.pager.mmap.chunks {
 		if err := syscall.Munmap(chunk); err != nil && er == nil {
 			er = fmt.Errorf("munmap chunk: %w", err)
 		}
 	}
-	db.pager.mmap.chunks = nil
-	db.pager.mmap.total = 0
-	if db.pager.fd != -1 {
-		if err := syscall.Close(db.pager.fd); err != nil && er == nil {
+	kv.pager.mmap.chunks = nil
+	kv.pager.mmap.total = 0
+	if kv.pager.fd != -1 {
+		if err := syscall.Close(kv.pager.fd); err != nil && er == nil {
 			er = fmt.Errorf("close file: %w", err)
 		}
-		db.pager.fd = -1
+		kv.pager.fd = -1
 	}
 	return er
 }
 
-func (db *KV) Get(key []byte) ([]byte, bool) {
-	return db.tree.Get(key)
+func (kv *KV) Get(key []byte) ([]byte, bool) {
+	return kv.tree.Get(key)
 }
 
-func (db *KV) Set(key, val []byte) error {
-	data := db.meta.save()
-	err := db.tree.Insert(key, val)
+func (kv *KV) Set(key, val []byte) error {
+	data := kv.meta.save()
+	err := kv.tree.Insert(key, val)
 	if err != nil {
 		return err
 	}
-	return updateOrRevert(db, data)
+	return updateOrRevert(kv, data)
 }
 
-func (db *KV) Del(key []byte) (bool, error) {
-	data := db.meta.save()
-	deleted, err := db.tree.Delete(key)
+func (kv *KV) Del(key []byte) (bool, error) {
+	data := kv.meta.save()
+	deleted, err := kv.tree.Delete(key)
 	if err != nil {
 		return false, err
 	}
 	if !deleted {
 		return false, nil
 	}
-	err = updateOrRevert(db, data)
+	err = updateOrRevert(kv, data)
 	return deleted, err
 }
 
-func updateOrRevert(db *KV, data []byte) error {
+func updateOrRevert(kv *KV, data []byte) error {
 	// ensure the on-disk meta page matches the in-memory one after an error
-	if db.failed {
+	if kv.failed {
 		// write and fsync the previous meta page
-		if _, err := syscall.Pwrite(db.pager.fd, data, 0); err != nil {
+		if _, err := syscall.Pwrite(kv.pager.fd, data, 0); err != nil {
 			return fmt.Errorf("recovery write meta: %w", err)
 		}
-		if err := syscall.Fsync(db.pager.fd); err != nil {
+		if err := syscall.Fsync(kv.pager.fd); err != nil {
 			return fmt.Errorf("recovery fsync: %w", err)
 		}
-		db.failed = false
+		kv.failed = false
 	}
 	// 2 phase update
-	err := updateFile(db)
+	err := updateFile(kv)
 	// revert on error
 	if err != nil {
-		db.failed = true
-		db.sync(data)
+		kv.failed = true
+		kv.sync(data)
 
-		db.pager.page.nAppend = 0
-		db.pager.page.updates = nil
+		kv.pager.page.nAppend = 0
+		kv.pager.page.updates = nil
 	}
 	return err
 }
 
-func updateFile(db *KV) error {
-	if err := db.pager.writePages(); err != nil {
+func updateFile(kv *KV) error {
+	if err := kv.pager.writePages(); err != nil {
 		return err
 	}
-	if err := syscall.Fsync(db.pager.fd); err != nil {
+	if err := syscall.Fsync(kv.pager.fd); err != nil {
 		return err
 	}
-	if err := updateRoot(db); err != nil {
+	if err := updateRoot(kv); err != nil {
 		return err
 	}
-	db.free.SetMaxSeq()
-	return syscall.Fsync(db.pager.fd)
+	kv.free.SetMaxSeq()
+	return syscall.Fsync(kv.pager.fd)
 }
 
-func readRoot(db *KV, fileSize int64) error {
+func readRoot(kv *KV, fileSize int64) error {
 	if fileSize == 0 {
-		db.pager.page.flushed = 2
-		db.free.headPage = 1
-		db.free.tailPage = 1
+		kv.pager.page.flushed = 2
+		kv.free.headPage = 1
+		kv.free.tailPage = 1
 		return nil
 	}
-	data := db.pager.mmap.chunks[0]
-	db.sync(data)
+	data := kv.pager.mmap.chunks[0]
+	kv.sync(data)
 
 	// verify the page
 	// 1. check alignment
@@ -145,57 +145,57 @@ func readRoot(db *KV, fileSize int64) error {
 		return fmt.Errorf("readRoot - db corrupt: invalid file size (%d) is not a multiple of page size", fileSize)
 	}
 	// 2. Check Boundaries (File must be large enough to hold all flushed pages)
-	expectedMinSize := int64(db.pager.page.flushed) * int64(BTreePageSize)
+	expectedMinSize := int64(kv.pager.page.flushed) * int64(BTreePageSize)
 	if fileSize < expectedMinSize {
-		return fmt.Errorf("readRoot - db corrupt: meta claims (%d) pages, but file only holds (%d)", db.pager.page.flushed, fileSize/int64(BTreePageSize))
+		return fmt.Errorf("readRoot - db corrupt: meta claims (%d) pages, but file only holds (%d)", kv.pager.page.flushed, fileSize/int64(BTreePageSize))
 	}
 	// 3. Check Root pointer
-	if db.tree.root == 0 {
+	if kv.tree.root == 0 {
 		return fmt.Errorf("readRoot - db corrupt: root pointer is cannot be 0 (Page 0 is reserved)")
 	}
-	if db.tree.root >= db.pager.page.flushed {
-		return fmt.Errorf("readRoot - db corrupt: root pointer (%d) is out of bounds (max %d)", db.tree.root, db.pager.page.flushed-1)
+	if kv.tree.root >= kv.pager.page.flushed {
+		return fmt.Errorf("readRoot - db corrupt: root pointer (%d) is out of bounds (max %d)", kv.tree.root, kv.pager.page.flushed-1)
 	}
 	return nil
 }
 
-func updateRoot(db *KV) error {
+func updateRoot(kv *KV) error {
 	// update meta with current state before saving
-	db.meta.Root = db.tree.root
-	db.meta.Flushed = db.pager.page.flushed
-	db.meta.FreeListHead = db.free.headPage
-	db.meta.FreeListTail = db.free.tailPage
-	db.meta.FreeListHeadSeq = db.free.headSeq
-	db.meta.FreeListTailSeq = db.free.tailSeq
+	kv.meta.Root = kv.tree.root
+	kv.meta.Flushed = kv.pager.page.flushed
+	kv.meta.FreeListHead = kv.free.headPage
+	kv.meta.FreeListTail = kv.free.tailPage
+	kv.meta.FreeListHeadSeq = kv.free.headSeq
+	kv.meta.FreeListTailSeq = kv.free.tailSeq
 
-	if _, err := syscall.Pwrite(db.pager.fd, db.meta.save(), 0); err != nil {
+	if _, err := syscall.Pwrite(kv.pager.fd, kv.meta.save(), 0); err != nil {
 		return fmt.Errorf("updateRoot: %w", err)
 	}
 	return nil
 }
 
-func (db *KV) pageAlloc(node []byte) uint64 {
-	if ptr := db.free.PopHead(); ptr != 0 {
-		if db.pager.page.updates == nil {
-			db.pager.page.updates = make(map[uint64][]byte)
+func (kv *KV) pageAlloc(node []byte) uint64 {
+	if ptr := kv.free.PopHead(); ptr != 0 {
+		if kv.pager.page.updates == nil {
+			kv.pager.page.updates = make(map[uint64][]byte)
 		}
-		db.pager.page.updates[ptr] = node
+		kv.pager.page.updates[ptr] = node
 		return ptr
 	}
 
-	return db.pager.pageAppend(node)
+	return kv.pager.pageAppend(node)
 }
 
-func (db *KV) sync(data []byte) {
-	db.meta.load(data)
+func (kv *KV) sync(data []byte) {
+	kv.meta.load(data)
 
 	// sync meta to pager and tree
-	db.pager.page.flushed = db.meta.Flushed
-	db.tree.root = db.meta.Root
+	kv.pager.page.flushed = kv.meta.Flushed
+	kv.tree.root = kv.meta.Root
 
-	db.free.headPage = db.meta.FreeListHead
-	db.free.tailPage = db.meta.FreeListTail
-	db.free.headSeq = db.meta.FreeListHeadSeq
-	db.free.tailSeq = db.meta.FreeListTailSeq
-	db.free.maxSeq = db.meta.FreeListTailSeq
+	kv.free.headPage = kv.meta.FreeListHead
+	kv.free.tailPage = kv.meta.FreeListTail
+	kv.free.headSeq = kv.meta.FreeListHeadSeq
+	kv.free.tailSeq = kv.meta.FreeListTailSeq
+	kv.free.maxSeq = kv.meta.FreeListTailSeq
 }
