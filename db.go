@@ -2,12 +2,80 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type DB struct {
 	Path string
 	kv   KV
+}
+
+func (db *DB) TableNew(tDef *TableDef) error {
+	if strings.HasPrefix(tDef.Name, "@") {
+		return fmt.Errorf("names must not start with @ characters")
+	}
+	t := getTableDef(db, tDef.Name)
+	if t != nil {
+		return fmt.Errorf("table %s already exists", tDef.Name)
+	}
+	if len(tDef.Cols) != len(tDef.Types) {
+		return fmt.Errorf("length of columns - %d, does not match length of types - %d", len(tDef.Types), len(tDef.Cols))
+	}
+	if tDef.PKeys < 1 {
+		return fmt.Errorf("pkeys must be greater than zero")
+	}
+	if tDef.PKeys > len(tDef.Cols) {
+		return fmt.Errorf("pkeys must be less than or equal to number of columns")
+	}
+	seen := make(map[string]struct{}, len(tDef.Cols))
+	for _, col := range tDef.Cols {
+		if col == "" {
+			return fmt.Errorf("column names must not be empty")
+		}
+		if _, exists := seen[col]; exists {
+			return fmt.Errorf("duplicate column name - %s", col)
+		}
+		seen[col] = struct{}{}
+	}
+
+	rec := (&Record{}).AddStr("key", []byte("next_prefix"))
+	ok, err := db.dbGet(TDefMeta, rec)
+	if err != nil {
+		panic(err)
+	}
+	if !ok {
+		return fmt.Errorf("unable to find meta table")
+	}
+	val := rec.Get("val")
+	if val == nil {
+		return fmt.Errorf("next_prefix not found in meta table")
+	}
+	prefix := binary.BigEndian.Uint32(val.Str)
+	tDef.Prefix = prefix
+	prefix += 1
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], prefix)
+	val.Str = buf[:]
+	_, err = db.dbUpdate(TDefMeta, *rec, ModeUpdateOnly)
+	if err != nil {
+		panic(err)
+	}
+	tableRecord := (&Record{}).AddStr("name", []byte(tDef.Name))
+	schemaBytes, err := json.Marshal(&tDef)
+	if err != nil {
+		panic(err)
+	}
+	tableRecord.AddStr("def", schemaBytes)
+	ok, err = db.dbUpdate(TDefTable, *tableRecord, ModeInsertOnly)
+	if err != nil {
+		panic(err)
+	}
+	if !ok {
+		return fmt.Errorf("unable to create table %s", tDef.Name)
+	}
+	return nil
 }
 
 func (db *DB) Get(table string, rec *Record) (bool, error) {

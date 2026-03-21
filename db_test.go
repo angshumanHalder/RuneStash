@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -13,6 +14,18 @@ var personTable = &TableDef{
 	Types:  []uint32{TypeInt64, TypeBytes},
 	Cols:   []string{"id", "name"},
 	PKeys:  1,
+}
+
+// seedNextPrefix inserts the next_prefix counter into TDefMeta.
+// TableNew reads this to assign a prefix to new tables.
+func seedNextPrefix(t *testing.T, db *DB, nextPrefix uint32) {
+	t.Helper()
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], nextPrefix)
+	rec := (&Record{}).AddStr("key", []byte("next_prefix")).AddStr("val", buf[:])
+	if _, err := db.dbUpdate(TDefMeta, *rec, ModeUpsert); err != nil {
+		t.Fatalf("seed next_prefix: %v", err)
+	}
 }
 
 // openTestDB opens a fresh KV-backed DB and registers cleanup.
@@ -242,6 +255,182 @@ func TestCheckRecord_TypeMismatch(t *testing.T) {
 	_, err := checkRecord(personTable, *rec, len(personTable.Cols))
 	if err == nil {
 		t.Fatal("expected error for type mismatch on 'id'")
+	}
+}
+
+// --- TableNew ---
+
+func TestTableNew_Success(t *testing.T) {
+	db := openTestDB(t)
+	seedNextPrefix(t, db, 3)
+
+	tDef := &TableDef{
+		Name:  "orders",
+		Types: []uint32{TypeInt64, TypeBytes},
+		Cols:  []string{"order_id", "item"},
+		PKeys: 1,
+	}
+	if err := db.TableNew(tDef); err != nil {
+		t.Fatalf("TableNew: %v", err)
+	}
+
+	// prefix must have been assigned
+	if tDef.Prefix != 3 {
+		t.Errorf("expected prefix=3, got %d", tDef.Prefix)
+	}
+
+	// next_prefix counter must have been incremented to 4
+	metaRec := (&Record{}).AddStr("key", []byte("next_prefix"))
+	ok, err := db.dbGet(TDefMeta, metaRec)
+	if err != nil || !ok {
+		t.Fatalf("reading next_prefix after TableNew: ok=%v err=%v", ok, err)
+	}
+	got := binary.BigEndian.Uint32(metaRec.Get("val").Str)
+	if got != 4 {
+		t.Errorf("expected next_prefix=4, got %d", got)
+	}
+
+	// table must be retrievable via getTableDef
+	stored := getTableDef(db, "orders")
+	if stored == nil {
+		t.Fatal("expected table 'orders' to exist after TableNew")
+	}
+	if stored.Prefix != 3 {
+		t.Errorf("stored prefix: got %d, want 3", stored.Prefix)
+	}
+}
+
+func TestTableNew_UsableAfterCreation(t *testing.T) {
+	db := openTestDB(t)
+	seedNextPrefix(t, db, 3)
+
+	tDef := &TableDef{
+		Name:  "orders",
+		Types: []uint32{TypeInt64, TypeBytes},
+		Cols:  []string{"order_id", "item"},
+		PKeys: 1,
+	}
+	if err := db.TableNew(tDef); err != nil {
+		t.Fatalf("TableNew: %v", err)
+	}
+
+	// insert and get a row to confirm the table is fully operational
+	db.Insert("orders", *(&Record{}).AddI64("order_id", 1).AddStr("item", []byte("apple")))
+	query := (&Record{}).AddI64("order_id", 1)
+	ok, err := db.Get("orders", query)
+	if err != nil || !ok {
+		t.Fatalf("Get after TableNew: ok=%v err=%v", ok, err)
+	}
+	if v := query.Get("item"); v == nil || string(v.Str) != "apple" {
+		t.Fatalf("expected item='apple', got %v", v)
+	}
+}
+
+func TestTableNew_PrefixesAreUnique(t *testing.T) {
+	db := openTestDB(t)
+	seedNextPrefix(t, db, 3)
+
+	a := &TableDef{Name: "a", Types: []uint32{TypeInt64}, Cols: []string{"id"}, PKeys: 1}
+	b := &TableDef{Name: "b", Types: []uint32{TypeInt64}, Cols: []string{"id"}, PKeys: 1}
+
+	if err := db.TableNew(a); err != nil {
+		t.Fatalf("TableNew a: %v", err)
+	}
+	if err := db.TableNew(b); err != nil {
+		t.Fatalf("TableNew b: %v", err)
+	}
+	if a.Prefix == b.Prefix {
+		t.Errorf("tables 'a' and 'b' got the same prefix %d", a.Prefix)
+	}
+}
+
+func TestTableNew_DuplicateName(t *testing.T) {
+	db := openTestDB(t)
+	seedNextPrefix(t, db, 3)
+
+	tDef := &TableDef{Name: "orders", Types: []uint32{TypeInt64}, Cols: []string{"id"}, PKeys: 1}
+	if err := db.TableNew(tDef); err != nil {
+		t.Fatalf("first TableNew: %v", err)
+	}
+
+	tDef2 := &TableDef{Name: "orders", Types: []uint32{TypeInt64}, Cols: []string{"id"}, PKeys: 1}
+	if err := db.TableNew(tDef2); err == nil {
+		t.Fatal("expected error for duplicate table name, got nil")
+	}
+}
+
+func TestTableNew_MetaNotFound(t *testing.T) {
+	db := openTestDB(t)
+	// TDefMeta is empty — next_prefix has never been seeded
+
+	tDef := &TableDef{Name: "orders", Types: []uint32{TypeInt64}, Cols: []string{"id"}, PKeys: 1}
+	if err := db.TableNew(tDef); err == nil {
+		t.Fatal("expected error when next_prefix is missing, got nil")
+	}
+}
+
+// --- TableNew validation ---
+
+func TestTableNew_ReservedName(t *testing.T) {
+	db := openTestDB(t)
+	tDef := &TableDef{Name: "@secret", Types: []uint32{TypeInt64}, Cols: []string{"id"}, PKeys: 1}
+	if err := db.TableNew(tDef); err == nil {
+		t.Fatal("expected error for reserved @ name")
+	}
+}
+
+func TestTableNew_ColTypeLengthMismatch(t *testing.T) {
+	db := openTestDB(t)
+	tDef := &TableDef{
+		Name:  "bad",
+		Types: []uint32{TypeInt64},           // 1 type
+		Cols:  []string{"id", "name"},        // 2 cols
+		PKeys: 1,
+	}
+	if err := db.TableNew(tDef); err == nil {
+		t.Fatal("expected error for col/type length mismatch")
+	}
+}
+
+func TestTableNew_PKeysTooFew(t *testing.T) {
+	db := openTestDB(t)
+	tDef := &TableDef{Name: "bad", Types: []uint32{TypeInt64}, Cols: []string{"id"}, PKeys: 0}
+	if err := db.TableNew(tDef); err == nil {
+		t.Fatal("expected error for PKeys < 1")
+	}
+}
+
+func TestTableNew_PKeysTooMany(t *testing.T) {
+	db := openTestDB(t)
+	tDef := &TableDef{Name: "bad", Types: []uint32{TypeInt64}, Cols: []string{"id"}, PKeys: 2}
+	if err := db.TableNew(tDef); err == nil {
+		t.Fatal("expected error for PKeys > len(Cols)")
+	}
+}
+
+func TestTableNew_EmptyColumnName(t *testing.T) {
+	db := openTestDB(t)
+	tDef := &TableDef{
+		Name:  "bad",
+		Types: []uint32{TypeInt64, TypeBytes},
+		Cols:  []string{"id", ""},
+		PKeys: 1,
+	}
+	if err := db.TableNew(tDef); err == nil {
+		t.Fatal("expected error for empty column name")
+	}
+}
+
+func TestTableNew_DuplicateColumnName(t *testing.T) {
+	db := openTestDB(t)
+	tDef := &TableDef{
+		Name:  "bad",
+		Types: []uint32{TypeInt64, TypeInt64},
+		Cols:  []string{"id", "id"},
+		PKeys: 1,
+	}
+	if err := db.TableNew(tDef); err == nil {
+		t.Fatal("expected error for duplicate column name")
 	}
 }
 
