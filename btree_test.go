@@ -135,6 +135,149 @@ func (c *C) Del(key string) {
 	c.Verify()
 }
 
+func (c *C) UpdateWith(key, val string, mode int) (*UpdateReq, error) {
+	req := &UpdateReq{Key: []byte(key), Val: []byte(val), Mode: mode}
+	err := c.tree.Update(req)
+	if err == nil {
+		if req.Added {
+			c.ref[key] = val
+		} else {
+			c.ref[key] = val
+		}
+		c.Verify()
+	}
+	return req, err
+}
+
+func TestBTree_Get(t *testing.T) {
+	c := newC()
+
+	// empty tree
+	_, ok := c.tree.Get([]byte("missing"))
+	if ok {
+		t.Fatal("expected not found on empty tree")
+	}
+
+	c.Add("apple", "fruit")
+	c.Add("banana", "yellow")
+	c.Add("cherry", "red")
+
+	for _, tc := range []struct{ key, want string }{
+		{"apple", "fruit"},
+		{"banana", "yellow"},
+		{"cherry", "red"},
+	} {
+		val, ok := c.tree.Get([]byte(tc.key))
+		if !ok {
+			t.Fatalf("key %q not found", tc.key)
+		}
+		if string(val) != tc.want {
+			t.Fatalf("key %q: got %q, want %q", tc.key, val, tc.want)
+		}
+	}
+
+	_, ok = c.tree.Get([]byte("grape"))
+	if ok {
+		t.Fatal("expected not found for missing key")
+	}
+}
+
+func TestBTree_Get_AfterUpdate(t *testing.T) {
+	c := newC()
+	c.Add("key1", "old")
+
+	// overwrite via Insert (which does leafUpdate on existing key)
+	c.Add("key1", "new")
+
+	val, ok := c.tree.Get([]byte("key1"))
+	if !ok || string(val) != "new" {
+		t.Fatalf("expected 'new' after update, got %q (ok=%v)", val, ok)
+	}
+}
+
+func TestBTree_Update_ModeInsertOnly(t *testing.T) {
+	c := newC()
+	c.Add("key1", "val1")
+
+	// inserting duplicate should fail
+	_, err := c.UpdateWith("key1", "val2", ModeInsertOnly)
+	if err == nil {
+		t.Fatal("expected duplicate key error, got nil")
+	}
+
+	// original value must be unchanged
+	val, ok := c.tree.Get([]byte("key1"))
+	if !ok || string(val) != "val1" {
+		t.Fatalf("expected original 'val1', got %q", val)
+	}
+
+	// inserting a new key must succeed and set Added=true
+	req, err := c.UpdateWith("key2", "val2", ModeInsertOnly)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !req.Added {
+		t.Fatal("Added should be true for a new key")
+	}
+}
+
+func TestBTree_Update_ModeUpdateOnly(t *testing.T) {
+	c := newC()
+	c.Add("key1", "old")
+
+	// updating a missing key must fail
+	_, err := c.UpdateWith("ghost", "val", ModeUpdateOnly)
+	if err == nil {
+		t.Fatal("expected error updating non-existent key, got nil")
+	}
+
+	// updating an existing key must succeed with Added=false
+	req, err := c.UpdateWith("key1", "new", ModeUpdateOnly)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.Added {
+		t.Fatal("Added should be false for an update")
+	}
+
+	val, ok := c.tree.Get([]byte("key1"))
+	if !ok || string(val) != "new" {
+		t.Fatalf("expected 'new', got %q", val)
+	}
+}
+
+func TestBTree_Update_ModeUpsert(t *testing.T) {
+	c := newC()
+
+	// upsert on new key → insert, Added=true
+	req, err := c.UpdateWith("key1", "v1", ModeUpsert)
+	if err != nil {
+		t.Fatalf("unexpected error on upsert insert: %v", err)
+	}
+	if !req.Added {
+		t.Fatal("Added should be true for a new key")
+	}
+
+	val, ok := c.tree.Get([]byte("key1"))
+	if !ok || string(val) != "v1" {
+		t.Fatalf("expected 'v1', got %q", val)
+	}
+
+	// upsert on existing key → update, Added=false
+	req, err = c.UpdateWith("key1", "v2", ModeUpsert)
+	if err != nil {
+		t.Fatalf("unexpected error on upsert update: %v", err)
+	}
+	if req.Added {
+		t.Fatal("Added should be false when key already exists")
+	}
+
+	val, ok = c.tree.Get([]byte("key1"))
+	if !ok || string(val) != "v2" {
+		t.Fatalf("expected 'v2', got %q", val)
+	}
+}
+
 func TestBTreeRandomOperations(t *testing.T) {
 	c := newC()
 	var keys []string

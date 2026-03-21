@@ -90,6 +90,27 @@ func (kv *KV) Del(key []byte) (bool, error) {
 	return deleted, err
 }
 
+func (kv *KV) Update(key []byte, val []byte, mode int) (bool, error) {
+	req := &UpdateReq{
+		Key:  key,
+		Val:  val,
+		Mode: mode,
+	}
+	data := kv.meta.save()
+	err := kv.tree.Update(req)
+	if err != nil {
+		kv.sync(data)
+		kv.pager.page.nAppend = 0
+		kv.pager.page.updates = nil
+		return false, err
+	}
+	err = updateOrRevert(kv, data)
+	if err != nil {
+		return false, err
+	}
+	return req.Added, nil
+}
+
 func updateOrRevert(kv *KV, data []byte) error {
 	// ensure the on-disk meta page matches the in-memory one after an error
 	if kv.failed {

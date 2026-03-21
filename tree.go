@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sort"
 )
 
@@ -11,6 +12,14 @@ type BTree struct {
 	get  func(uint64) []byte
 	new  func([]byte) uint64
 	del  func(uint64)
+}
+
+type UpdateReq struct {
+	tree  *BTree
+	Added bool
+	Key   []byte
+	Val   []byte
+	Mode  int
 }
 
 func (tree *BTree) Insert(key, val []byte) error {
@@ -78,6 +87,41 @@ func (tree *BTree) Get(key []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return treeGet(tree, tree.get(tree.root), key)
+}
+
+func (tree *BTree) Update(req *UpdateReq) error {
+	if tree.root == 0 {
+		if req.Mode == ModeUpdateOnly {
+			return fmt.Errorf("update error: row does not exists")
+		}
+		root := BNode(make([]byte, BTreePageSize))
+		root.setHeader(BNodeLeaf, 2)
+		nodeAppendKV(root, 0, 0, nil, nil)
+		nodeAppendKV(root, 1, 0, req.Key, req.Val)
+		tree.root = tree.new(root)
+		req.Added = true
+		return nil
+	}
+	newRoot, err := treeUpdate(tree, tree.get(tree.root), req)
+	if err != nil {
+		return err
+	}
+	tree.del(tree.root)
+	nSplit, split := nodeSplit3(newRoot)
+	if nSplit > 1 {
+		root := BNode(make([]byte, BTreePageSize))
+		root.setHeader(BNodeNode, nSplit)
+		for i, kNode := range split[:nSplit] {
+			ptr, k := tree.new(kNode), kNode.getKey(0)
+			nodeAppendKV(root, uint16(i), ptr, k, nil)
+		}
+		tree.root = tree.new(root)
+	} else {
+		tree.root = tree.new(split[0])
+	}
+
+	return nil
+
 }
 
 func checkLimit(key, val []byte) error {
@@ -329,4 +373,44 @@ func treeGet(tree *BTree, nodeData []byte, key []byte) ([]byte, bool) {
 	default:
 		panic("bad node type")
 	}
+}
+
+func treeUpdate(tree *BTree, node BNode, req *UpdateReq) (BNode, error) {
+	newNode := BNode(make([]byte, 2*BTreePageSize))
+	idx := nodeLookupLE(node, req.Key)
+	switch node.bType() {
+	case BNodeLeaf:
+		exists := false
+		if idx < node.nKeys() {
+			exists = bytes.Equal(node.getKey(idx), req.Key)
+		}
+		// Enforce relations rules
+		if req.Mode == ModeInsertOnly && exists {
+			return nil, fmt.Errorf("duplicate key error: row already exists")
+		}
+		if req.Mode == ModeUpdateOnly && !exists {
+			return nil, fmt.Errorf("update error: row does not exists")
+		}
+		if !exists {
+			req.Added = true
+			leafInsert(newNode, node, idx+1, req.Key, req.Val)
+		} else {
+			req.Added = false
+			leafUpdate(newNode, node, idx, req.Key, req.Val)
+		}
+	case BNodeNode:
+		kPtr := node.getPtr(idx)
+		child := tree.get(kPtr)
+		newChild, err := treeUpdate(tree, child, req)
+		if err != nil {
+			return nil, err
+		}
+		nSplit, split := nodeSplit3(newChild)
+		tree.del(kPtr)
+		nodeReplaceKidN(tree, newNode, node, idx, split[:nSplit]...)
+	default:
+		panic("bad node type")
+	}
+
+	return newNode, nil
 }

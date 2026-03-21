@@ -5,6 +5,17 @@ const (
 	BNodeLeaf = 2 // leaf nodes with values
 )
 
+const (
+	TypeBytes = 1 // string (of arbitrary bytes)
+	TypeInt64 = 2 // integer; signed 64-bit
+)
+
+const (
+	ModeUpsert = iota
+	ModeUpdateOnly
+	ModeInsertOnly
+)
+
 const HeaderSize = 4
 const BTreePageSize = 4096
 const BTreeMaxKeySize = 1000

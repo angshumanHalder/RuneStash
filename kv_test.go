@@ -41,6 +41,120 @@ func TestKV_LifeCycle(t *testing.T) {
 	}
 }
 
+func TestKV_GetAndSet(t *testing.T) {
+	dir := t.TempDir()
+	db := &KV{Path: filepath.Join(dir, "test.db")}
+	if err := db.Open(); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// missing key on empty tree
+	_, ok := db.Get([]byte("k1"))
+	if ok {
+		t.Fatal("expected not found on empty DB")
+	}
+
+	if err := db.Set([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	val, ok := db.Get([]byte("k1"))
+	if !ok || string(val) != "v1" {
+		t.Fatalf("expected 'v1', got %q (ok=%v)", val, ok)
+	}
+
+	_, ok = db.Get([]byte("missing"))
+	if ok {
+		t.Fatal("expected not found for missing key")
+	}
+}
+
+func TestKV_Update_ModeInsertOnly(t *testing.T) {
+	dir := t.TempDir()
+	db := &KV{Path: filepath.Join(dir, "test.db")}
+	if err := db.Open(); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	added, err := db.Update([]byte("k1"), []byte("v1"), ModeInsertOnly)
+	if err != nil || !added {
+		t.Fatalf("expected successful insert, got added=%v err=%v", added, err)
+	}
+
+	// duplicate insert must fail
+	_, err = db.Update([]byte("k1"), []byte("v2"), ModeInsertOnly)
+	if err == nil {
+		t.Fatal("expected duplicate key error, got nil")
+	}
+
+	// original value must be unchanged
+	val, ok := db.Get([]byte("k1"))
+	if !ok || string(val) != "v1" {
+		t.Fatalf("expected 'v1', got %q", val)
+	}
+}
+
+func TestKV_Update_ModeUpdateOnly(t *testing.T) {
+	dir := t.TempDir()
+	db := &KV{Path: filepath.Join(dir, "test.db")}
+	if err := db.Open(); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// seed so the tree is not empty
+	if err := db.Set([]byte("seed"), []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+
+	// updating a non-existent key must fail
+	_, err := db.Update([]byte("ghost"), []byte("val"), ModeUpdateOnly)
+	if err == nil {
+		t.Fatal("expected error updating non-existent key")
+	}
+
+	// set a key, then update it
+	if err := db.Set([]byte("k1"), []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	added, err := db.Update([]byte("k1"), []byte("new"), ModeUpdateOnly)
+	if err != nil || added {
+		t.Fatalf("expected update ok with Added=false, got added=%v err=%v", added, err)
+	}
+
+	val, _ := db.Get([]byte("k1"))
+	if string(val) != "new" {
+		t.Fatalf("expected 'new', got %q", val)
+	}
+}
+
+func TestKV_Update_ModeUpsert(t *testing.T) {
+	dir := t.TempDir()
+	db := &KV{Path: filepath.Join(dir, "test.db")}
+	if err := db.Open(); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// upsert on new key → insert, Added=true
+	added, err := db.Update([]byte("k1"), []byte("v1"), ModeUpsert)
+	if err != nil || !added {
+		t.Fatalf("expected insert on upsert, got added=%v err=%v", added, err)
+	}
+
+	// upsert on existing key → update, Added=false
+	added, err = db.Update([]byte("k1"), []byte("v2"), ModeUpsert)
+	if err != nil || added {
+		t.Fatalf("expected update on upsert, got added=%v err=%v", added, err)
+	}
+
+	val, _ := db.Get([]byte("k1"))
+	if string(val) != "v2" {
+		t.Fatalf("expected 'v2', got %q", val)
+	}
+}
+
 func TestKV_Persistence(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "runestash.db")
