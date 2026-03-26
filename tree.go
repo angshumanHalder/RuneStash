@@ -28,6 +28,21 @@ type BIter struct {
 	pos  []uint16
 }
 
+func (tree *BTree) commitRoot(node BNode) {
+	tree.del(tree.root)
+	nSplit, split := nodeSplit3(node)
+	if nSplit > 1 {
+		root := BNode(make([]byte, BTreePageSize))
+		root.setHeader(BNodeNode, nSplit)
+		for i, kNode := range split[:nSplit] {
+			nodeAppendKV(root, uint16(i), tree.new(kNode), kNode.getKey(0), nil)
+		}
+		tree.root = tree.new(root)
+	} else {
+		tree.root = tree.new(split[0])
+	}
+}
+
 func (tree *BTree) Insert(key, val []byte) error {
 	if err := checkLimit(key, val); err != nil {
 		return err
@@ -43,20 +58,7 @@ func (tree *BTree) Insert(key, val []byte) error {
 	}
 
 	node := treeInsert(tree, tree.get(tree.root), key, val)
-	nSplit, split := nodeSplit3(node)
-	tree.del(tree.root)
-	if nSplit > 1 {
-		root := BNode(make([]byte, BTreePageSize))
-		root.setHeader(BNodeNode, nSplit)
-		for i, kNode := range split[:nSplit] {
-			ptr, k := tree.new(kNode), kNode.getKey(0)
-			nodeAppendKV(root, uint16(i), ptr, k, nil)
-		}
-		tree.root = tree.new(root)
-	} else {
-		tree.root = tree.new(split[0])
-	}
-
+	tree.commitRoot(node)
 	return nil
 }
 
@@ -112,20 +114,7 @@ func (tree *BTree) Update(req *UpdateReq) error {
 	if err != nil {
 		return err
 	}
-	tree.del(tree.root)
-	nSplit, split := nodeSplit3(newRoot)
-	if nSplit > 1 {
-		root := BNode(make([]byte, BTreePageSize))
-		root.setHeader(BNodeNode, nSplit)
-		for i, kNode := range split[:nSplit] {
-			ptr, k := tree.new(kNode), kNode.getKey(0)
-			nodeAppendKV(root, uint16(i), ptr, k, nil)
-		}
-		tree.root = tree.new(root)
-	} else {
-		tree.root = tree.new(split[0])
-	}
-
+	tree.commitRoot(newRoot)
 	return nil
 
 }

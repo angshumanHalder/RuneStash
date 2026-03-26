@@ -20,6 +20,7 @@ const (
 	CmpGE = 3
 	CmpGT = 2
 	CmpLT = -2
+	CmpLE = -3
 )
 
 const HeaderSize = 4
