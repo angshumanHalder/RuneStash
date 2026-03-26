@@ -16,6 +16,12 @@ const (
 	ModeInsertOnly
 )
 
+const (
+	CmpGE = 3
+	CmpGT = 2
+	CmpLT = -2
+)
+
 const HeaderSize = 4
 const BTreePageSize = 4096
 const BTreeMaxKeySize = 1000

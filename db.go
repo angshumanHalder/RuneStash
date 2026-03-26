@@ -184,18 +184,7 @@ func encodeKey(out []byte, prefix uint32, vals []Value) []byte {
 	var buf [4]byte
 	binary.BigEndian.PutUint32(buf[:], prefix)
 	out = append(out, buf[:]...)
-	for _, v := range vals {
-		switch v.Type {
-		case TypeInt64:
-			var ibuf [8]byte
-			// db assumes the primary key is always a positive number
-			binary.BigEndian.PutUint64(ibuf[:], uint64(v.I64))
-			out = append(out, ibuf[:]...)
-		case TypeBytes:
-			out = append(out, v.Str...)
-			out = append(out, 0)
-		}
-	}
+	out = encodeValues(out, vals)
 	return out
 }
 
@@ -204,30 +193,54 @@ func decodeValues(in []byte, out []Value) {
 	for i := range out {
 		switch out[i].Type {
 		case TypeInt64:
-			out[i].I64 = int64(binary.LittleEndian.Uint64(in[offset:]))
+			u := binary.BigEndian.Uint64(in[offset:])
+			out[i].I64 = int64(u - (1 << 63))
 			offset += 8
 		case TypeBytes:
-			length := int(binary.LittleEndian.Uint32(in[offset:]))
-			offset += 4
-			out[i].Str = in[offset : offset+length]
-			offset += length
+			var str []byte
+			for offset < len(in) {
+				b := in[offset]
+				offset++
+				if b == 0x00 {
+					break
+				}
+				if b == 0x01 {
+					str = append(str, in[offset]-0x01)
+					offset++
+				} else {
+					str = append(str, b)
+				}
+			}
+			out[i].Str = str
 		}
 	}
 }
 
 func encodeValues(out []byte, vals []Value) []byte {
 	for _, v := range vals {
-		switch v.Type {
-		case TypeInt64:
-			var buf [8]byte
-			binary.LittleEndian.PutUint64(buf[:], uint64(v.I64))
-			out = append(out, buf[:]...)
-		case TypeBytes:
-			var buf [4]byte
-			binary.LittleEndian.PutUint32(buf[:], uint32(len(v.Str)))
-			out = append(out, buf[:]...)
-			out = append(out, v.Str...)
+		out = encodeValue(out, v)
+	}
+	return out
+}
+
+func encodeValue(out []byte, v Value) []byte {
+	switch v.Type {
+	case TypeInt64:
+		var buf [8]byte
+		// flip sign bit so that negative numbers sort before positive numbers
+		u := uint64(v.I64) + (1 << 63)
+		binary.BigEndian.PutUint64(buf[:], u)
+		out = append(out, buf[:]...)
+	case TypeBytes:
+		// escape 0x00 -> 0x01 0x01, 0x01 -> 0x01 0x02, then null-terminate
+		for _, b := range v.Str {
+			if b <= 0x01 {
+				out = append(out, 0x01, b+0x01)
+			} else {
+				out = append(out, b)
+			}
 		}
+		out = append(out, 0x00)
 	}
 	return out
 }
