@@ -77,14 +77,14 @@ func TestKV_Update_ModeInsertOnly(t *testing.T) {
 	}
 	defer db.Close()
 
-	added, err := db.Update([]byte("k1"), []byte("v1"), ModeInsertOnly)
-	if err != nil || !added {
-		t.Fatalf("expected successful insert, got added=%v err=%v", added, err)
+	req := &UpdateReq{Key: []byte("k1"), Val: []byte("v1"), Mode: ModeInsertOnly}
+	if err := db.Update(req); err != nil || !req.Added {
+		t.Fatalf("expected successful insert, got added=%v err=%v", req.Added, err)
 	}
 
 	// duplicate insert must fail
-	_, err = db.Update([]byte("k1"), []byte("v2"), ModeInsertOnly)
-	if err == nil {
+	req2 := &UpdateReq{Key: []byte("k1"), Val: []byte("v2"), Mode: ModeInsertOnly}
+	if err := db.Update(req2); err == nil {
 		t.Fatal("expected duplicate key error, got nil")
 	}
 
@@ -109,8 +109,8 @@ func TestKV_Update_ModeUpdateOnly(t *testing.T) {
 	}
 
 	// updating a non-existent key must fail
-	_, err := db.Update([]byte("ghost"), []byte("val"), ModeUpdateOnly)
-	if err == nil {
+	ghost := &UpdateReq{Key: []byte("ghost"), Val: []byte("val"), Mode: ModeUpdateOnly}
+	if err := db.Update(ghost); err == nil {
 		t.Fatal("expected error updating non-existent key")
 	}
 
@@ -118,9 +118,9 @@ func TestKV_Update_ModeUpdateOnly(t *testing.T) {
 	if err := db.Set([]byte("k1"), []byte("old")); err != nil {
 		t.Fatal(err)
 	}
-	added, err := db.Update([]byte("k1"), []byte("new"), ModeUpdateOnly)
-	if err != nil || added {
-		t.Fatalf("expected update ok with Added=false, got added=%v err=%v", added, err)
+	req := &UpdateReq{Key: []byte("k1"), Val: []byte("new"), Mode: ModeUpdateOnly}
+	if err := db.Update(req); err != nil || req.Added {
+		t.Fatalf("expected update ok with Added=false, got added=%v err=%v", req.Added, err)
 	}
 
 	val, _ := db.Get([]byte("k1"))
@@ -138,15 +138,15 @@ func TestKV_Update_ModeUpsert(t *testing.T) {
 	defer db.Close()
 
 	// upsert on new key → insert, Added=true
-	added, err := db.Update([]byte("k1"), []byte("v1"), ModeUpsert)
-	if err != nil || !added {
-		t.Fatalf("expected insert on upsert, got added=%v err=%v", added, err)
+	req := &UpdateReq{Key: []byte("k1"), Val: []byte("v1"), Mode: ModeUpsert}
+	if err := db.Update(req); err != nil || !req.Added {
+		t.Fatalf("expected insert on upsert, got added=%v err=%v", req.Added, err)
 	}
 
 	// upsert on existing key → update, Added=false
-	added, err = db.Update([]byte("k1"), []byte("v2"), ModeUpsert)
-	if err != nil || added {
-		t.Fatalf("expected update on upsert, got added=%v err=%v", added, err)
+	req2 := &UpdateReq{Key: []byte("k1"), Val: []byte("v2"), Mode: ModeUpsert}
+	if err := db.Update(req2); err != nil || req2.Added {
+		t.Fatalf("expected update on upsert, got added=%v err=%v", req2.Added, err)
 	}
 
 	val, _ := db.Get([]byte("k1"))

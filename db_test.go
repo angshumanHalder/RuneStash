@@ -9,11 +9,11 @@ import (
 
 // schema used across all DB tests: int64 primary key + bytes value column
 var personTable = &TableDef{
-	Name:   "person",
-	Prefix: 10,
-	Types:  []uint32{TypeInt64, TypeBytes},
-	Cols:   []string{"id", "name"},
-	PKeys:  1,
+	Name:     "person",
+	Prefixes: []uint32{10},
+	Types:    []uint32{TypeInt64, TypeBytes},
+	Cols:     []string{"id", "name"},
+	PKeys:    1,
 }
 
 // seedNextPrefix inserts the next_prefix counter into TDefMeta.
@@ -155,10 +155,10 @@ func TestDB_Update(t *testing.T) {
 
 	db.Insert("person", *(&Record{}).AddI64("id", 1).AddStr("name", []byte("alice")))
 
-	// ok=false means the row was updated (not newly inserted), which is correct
+	// ok=true means the update had effect (row existed and was changed)
 	ok, err := db.Update("person", *(&Record{}).AddI64("id", 1).AddStr("name", []byte("alice2")))
-	if err != nil || ok {
-		t.Fatalf("Update: expected ok=false (updated, not inserted), got ok=%v err=%v", ok, err)
+	if err != nil || !ok {
+		t.Fatalf("Update: expected ok=true (row updated), got ok=%v err=%v", ok, err)
 	}
 
 	query := (&Record{}).AddI64("id", 1)
@@ -193,10 +193,10 @@ func TestDB_Upsert_InsertThenUpdate(t *testing.T) {
 		t.Fatalf("Upsert (insert): ok=%v err=%v", ok, err)
 	}
 
-	// second upsert: update → Added=false → ok=false
+	// second upsert: update → Updated=true → ok=true
 	ok, err = db.Upsert("person", *(&Record{}).AddI64("id", 1).AddStr("name", []byte("v2")))
-	if err != nil || ok {
-		t.Fatalf("Upsert (update) should return ok=false: ok=%v err=%v", ok, err)
+	if err != nil || !ok {
+		t.Fatalf("Upsert (update) should return ok=true: ok=%v err=%v", ok, err)
 	}
 
 	query := (&Record{}).AddI64("id", 1)
@@ -275,8 +275,8 @@ func TestTableNew_Success(t *testing.T) {
 	}
 
 	// prefix must have been assigned
-	if tDef.Prefix != 3 {
-		t.Errorf("expected prefix=3, got %d", tDef.Prefix)
+	if tDef.Prefixes[0] != 3 {
+		t.Errorf("expected prefix=3, got %d", tDef.Prefixes[0])
 	}
 
 	// next_prefix counter must have been incremented to 4
@@ -295,8 +295,8 @@ func TestTableNew_Success(t *testing.T) {
 	if stored == nil {
 		t.Fatal("expected table 'orders' to exist after TableNew")
 	}
-	if stored.Prefix != 3 {
-		t.Errorf("stored prefix: got %d, want 3", stored.Prefix)
+	if stored.Prefixes[0] != 3 {
+		t.Errorf("stored prefix: got %d, want 3", stored.Prefixes[0])
 	}
 }
 
@@ -339,8 +339,8 @@ func TestTableNew_PrefixesAreUnique(t *testing.T) {
 	if err := db.TableNew(b); err != nil {
 		t.Fatalf("TableNew b: %v", err)
 	}
-	if a.Prefix == b.Prefix {
-		t.Errorf("tables 'a' and 'b' got the same prefix %d", a.Prefix)
+	if a.Prefixes[0] == b.Prefixes[0] {
+		t.Errorf("tables 'a' and 'b' got the same prefix %d", a.Prefixes[0])
 	}
 }
 

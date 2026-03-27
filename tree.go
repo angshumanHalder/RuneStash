@@ -15,11 +15,13 @@ type BTree struct {
 }
 
 type UpdateReq struct {
-	tree  *BTree
-	Added bool
-	Key   []byte
-	Val   []byte
-	Mode  int
+	tree    *BTree
+	Added   bool
+	Updated bool
+	Old     []byte
+	Key     []byte
+	Val     []byte
+	Mode    int
 }
 
 type BIter struct {
@@ -445,9 +447,12 @@ func treeUpdate(tree *BTree, node BNode, req *UpdateReq) (BNode, error) {
 		}
 		if !exists {
 			req.Added = true
+			req.Updated = true
 			leafInsert(newNode, node, idx+1, req.Key, req.Val)
 		} else {
 			req.Added = false
+			req.Updated = true
+			req.Old = node.getVal(idx)
 			leafUpdate(newNode, node, idx, req.Key, req.Val)
 		}
 	case BNodeNode:

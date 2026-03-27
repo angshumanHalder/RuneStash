@@ -16,28 +16,29 @@ type Record struct {
 }
 
 type TableDef struct {
-	Name   string
-	Types  []uint32
-	Cols   []string
-	PKeys  int
-	Prefix uint32
+	Name     string
+	Types    []uint32
+	Cols     []string
+	Indexes  [][]string
+	PKeys    int
+	Prefixes []uint32
 }
 
 // TDefTable internal table
 var TDefTable = &TableDef{
-	Prefix: 2,
-	Name:   "@table",
-	Types:  []uint32{TypeBytes, TypeBytes},
-	Cols:   []string{"name", "def"},
-	PKeys:  1,
+	Prefixes: []uint32{2},
+	Name:     "@table",
+	Types:    []uint32{TypeBytes, TypeBytes},
+	Cols:     []string{"name", "def"},
+	PKeys:    1,
 }
 
 var TDefMeta = &TableDef{
-	Prefix: 1,
-	Name:   "@meta",
-	Types:  []uint32{TypeBytes, TypeBytes},
-	Cols:   []string{"key", "val"},
-	PKeys:  1,
+	Prefixes: []uint32{1},
+	Name:     "@meta",
+	Types:    []uint32{TypeBytes, TypeBytes},
+	Cols:     []string{"key", "val"},
+	PKeys:    1,
 }
 
 func (r *Record) AddStr(col string, val []byte) *Record {

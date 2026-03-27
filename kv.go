@@ -90,25 +90,16 @@ func (kv *KV) Del(key []byte) (bool, error) {
 	return deleted, err
 }
 
-func (kv *KV) Update(key []byte, val []byte, mode int) (bool, error) {
-	req := &UpdateReq{
-		Key:  key,
-		Val:  val,
-		Mode: mode,
-	}
+func (kv *KV) Update(req *UpdateReq) error {
 	data := kv.meta.save()
 	err := kv.tree.Update(req)
 	if err != nil {
 		kv.sync(data)
 		kv.pager.page.nAppend = 0
 		kv.pager.page.updates = nil
-		return false, err
+		return err
 	}
-	err = updateOrRevert(kv, data)
-	if err != nil {
-		return false, err
-	}
-	return req.Added, nil
+	return updateOrRevert(kv, data)
 }
 
 func updateOrRevert(kv *KV, data []byte) error {
