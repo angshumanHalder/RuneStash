@@ -14,6 +14,11 @@ type DB struct {
 	kv   KV
 }
 
+type DbTX struct {
+	kv KvTX
+	db *DB
+}
+
 type Scanner struct {
 	Cmp1 int
 	Cmp2 int
@@ -25,6 +30,40 @@ type Scanner struct {
 	index  int
 	iter   *BIter
 	keyEnd []byte
+}
+
+func (db *DB) Begin(tx *DbTX) {
+	tx.db = db
+	tx.kv = KvTX{kv: &db.kv, meta: []byte{}}
+	db.kv.Begin(&tx.kv)
+}
+
+func (db *DB) Commit(tx *DbTX) error {
+	return db.kv.Commit(&tx.kv)
+}
+
+func (db *DB) Abort(tx *DbTX) {
+	db.kv.Abort(&tx.kv)
+}
+
+func (tx *DbTX) Scan(table string, req *Scanner) error {
+	return tx.db.Scan(table, req)
+}
+
+func (tx *DbTX) Set(table string, rec Record, mode int) (bool, error) {
+	tDef := getTableDef(tx.db, table)
+	if tDef == nil {
+		return false, fmt.Errorf("table: %s - not found", table)
+	}
+	return tx.db.dbUpdate(&tx.kv, tDef, rec, mode)
+}
+
+func (tx *DbTX) Delete(table string, rec Record) (bool, error) {
+	tDef := getTableDef(tx.db, table)
+	if tDef == nil {
+		return false, fmt.Errorf("table: %s - not found", table)
+	}
+	return tx.db.dbDelete(&tx.kv, tDef, rec)
 }
 
 func (db *DB) TableNew(tDef *TableDef) error {
@@ -76,7 +115,7 @@ func (db *DB) TableNew(tDef *TableDef) error {
 	var buf [4]byte
 	binary.BigEndian.PutUint32(buf[:], prefix)
 	val.Str = buf[:]
-	_, err = db.dbUpdate(TDefMeta, *rec, ModeUpdateOnly)
+	_, err = db.dbUpdate(&db.kv, TDefMeta, *rec, ModeUpdateOnly)
 	if err != nil {
 		panic(err)
 	}
@@ -86,7 +125,7 @@ func (db *DB) TableNew(tDef *TableDef) error {
 		panic(err)
 	}
 	tableRecord.AddStr("def", schemaBytes)
-	ok, err = db.dbUpdate(TDefTable, *tableRecord, ModeInsertOnly)
+	ok, err = db.dbUpdate(&db.kv, TDefTable, *tableRecord, ModeInsertOnly)
 	if err != nil {
 		panic(err)
 	}
@@ -109,7 +148,7 @@ func (db *DB) Insert(table string, rec Record) (bool, error) {
 	if tDef == nil {
 		return false, fmt.Errorf("table: %s - not found", table)
 	}
-	return db.dbUpdate(tDef, rec, ModeInsertOnly)
+	return db.dbUpdate(&db.kv, tDef, rec, ModeInsertOnly)
 }
 
 func (db *DB) Update(table string, rec Record) (bool, error) {
@@ -117,7 +156,7 @@ func (db *DB) Update(table string, rec Record) (bool, error) {
 	if tDef == nil {
 		return false, fmt.Errorf("table: %s - not found", table)
 	}
-	return db.dbUpdate(tDef, rec, ModeUpdateOnly)
+	return db.dbUpdate(&db.kv, tDef, rec, ModeUpdateOnly)
 }
 
 func (db *DB) Upsert(table string, rec Record) (bool, error) {
@@ -125,7 +164,7 @@ func (db *DB) Upsert(table string, rec Record) (bool, error) {
 	if tDef == nil {
 		return false, fmt.Errorf("table: %s - not found", table)
 	}
-	return db.dbUpdate(tDef, rec, ModeUpsert)
+	return db.dbUpdate(&db.kv, tDef, rec, ModeUpsert)
 }
 
 func (db *DB) Delete(table string, rec Record) (bool, error) {
@@ -133,7 +172,7 @@ func (db *DB) Delete(table string, rec Record) (bool, error) {
 	if tDef == nil {
 		return false, fmt.Errorf("table: %s - not found", table)
 	}
-	return db.dbDelete(tDef, rec)
+	return db.dbDelete(&db.kv, tDef, rec)
 }
 
 func (db *DB) Scan(table string, req *Scanner) error {
@@ -240,7 +279,7 @@ func (db *DB) dbGet(tDef *TableDef, rec *Record) (bool, error) {
 	return true, nil
 }
 
-func (db *DB) dbUpdate(tDef *TableDef, rec Record, mode int) (bool, error) {
+func (db *DB) dbUpdate(kv kvStore, tDef *TableDef, rec Record, mode int) (bool, error) {
 	values, err := checkRecord(tDef, rec, len(tDef.Cols))
 	if err != nil {
 		return false, err
@@ -248,8 +287,8 @@ func (db *DB) dbUpdate(tDef *TableDef, rec Record, mode int) (bool, error) {
 	key := encodeKey(nil, tDef.Prefixes[0], values[:tDef.PKeys])
 	val := encodeValues(nil, values[tDef.PKeys:])
 	req := &UpdateReq{Key: key, Val: val, Mode: mode}
-	if err = db.kv.Update(req); err != nil {
-		return false, err
+	if updated, e := kv.Update(req); !updated {
+		return updated, e
 	}
 	indexes := tableIndexes(tDef)
 	if req.Updated && !req.Added && len(indexes) > 1 {
@@ -263,7 +302,7 @@ func (db *DB) dbUpdate(tDef *TableDef, rec Record, mode int) (bool, error) {
 		copy(oldValues[:tDef.PKeys], values[:tDef.PKeys])
 		copy(oldValues[tDef.PKeys:], oldNonPk)
 		for i := 1; i < len(indexes); i++ {
-			if _, err = db.kv.Del(encodeIndexKey(tDef, i, oldValues)); err != nil {
+			if _, err = kv.Del(encodeIndexKey(tDef, i, oldValues)); err != nil {
 				return false, err
 			}
 		}
@@ -271,7 +310,7 @@ func (db *DB) dbUpdate(tDef *TableDef, rec Record, mode int) (bool, error) {
 	if req.Updated && len(indexes) > 1 {
 		// row was added or modified: insert new secondary index keys
 		for i := 1; i < len(indexes); i++ {
-			if err = db.kv.Set(encodeIndexKey(tDef, i, values), nil); err != nil {
+			if err = kv.Set(encodeIndexKey(tDef, i, values), nil); err != nil {
 				return false, err
 			}
 		}
@@ -279,13 +318,13 @@ func (db *DB) dbUpdate(tDef *TableDef, rec Record, mode int) (bool, error) {
 	return req.Updated, nil
 }
 
-func (db *DB) dbDelete(tDef *TableDef, rec Record) (bool, error) {
+func (db *DB) dbDelete(kv kvStore, tDef *TableDef, rec Record) (bool, error) {
 	values, err := checkRecord(tDef, rec, tDef.PKeys)
 	if err != nil {
 		return false, err
 	}
 	key := encodeKey(nil, tDef.Prefixes[0], values[:tDef.PKeys])
-	return db.kv.Del(key)
+	return kv.Del(key)
 }
 
 func dbScan(db *DB, tDef *TableDef, req *Scanner) error {

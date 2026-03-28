@@ -14,6 +14,89 @@ type KV struct {
 	failed bool
 }
 
+type KvTX struct {
+	kv       *KV
+	meta     []byte
+	newPages map[uint64]struct{} // pages allocated within this transaction
+	recycled []uint64            // tx-local pages freed, available for reuse within the tx
+}
+
+func (kv *KV) Begin(tx *KvTX) {
+	tx.kv = kv
+	tx.meta = kv.meta.save()
+	tx.newPages = make(map[uint64]struct{})
+	tx.recycled = nil
+	kv.tree.new = tx.pageNew
+	kv.tree.del = tx.pageFree
+}
+
+func (kv *KV) Commit(tx *KvTX) error {
+	kv.tree.new = kv.pageAlloc
+	kv.tree.del = kv.free.PushTail
+	for _, ptr := range tx.recycled {
+		kv.free.PushTail(ptr)
+	}
+	return updateOrRevert(tx.kv, tx.meta)
+}
+
+func (kv *KV) Abort(tx *KvTX) {
+	kv.tree.new = kv.pageAlloc
+	kv.tree.del = kv.free.PushTail
+	kv.sync(tx.meta)
+	tx.kv.pager.page.nAppend = 0
+	tx.kv.pager.page.updates = map[uint64][]byte{}
+}
+
+func (tx *KvTX) pageNew(node []byte) uint64 {
+	var ptr uint64
+	if len(tx.recycled) > 0 {
+		ptr = tx.recycled[len(tx.recycled)-1]
+		tx.recycled = tx.recycled[:len(tx.recycled)-1]
+		if tx.kv.pager.page.updates == nil {
+			tx.kv.pager.page.updates = make(map[uint64][]byte)
+		}
+		tx.kv.pager.page.updates[ptr] = node
+	} else {
+		ptr = tx.kv.pageAlloc(node)
+	}
+	tx.newPages[ptr] = struct{}{}
+	return ptr
+}
+
+func (tx *KvTX) pageFree(ptr uint64) {
+	if _, owned := tx.newPages[ptr]; owned {
+		delete(tx.newPages, ptr)
+		if ptr < tx.kv.pager.page.flushed {
+			delete(tx.kv.pager.page.updates, ptr)
+		}
+		tx.recycled = append(tx.recycled, ptr)
+	} else {
+		tx.kv.free.PushTail(ptr)
+	}
+}
+
+func (tx *KvTX) Seek(key []byte, cmp int) *BIter {
+	return tx.kv.tree.Seek(key, cmp)
+}
+
+func (tx *KvTX) Update(req *UpdateReq) (bool, error) {
+	return tx.kv.tree.Update(req)
+}
+
+func (tx *KvTX) Del(key []byte) (bool, error) {
+	return tx.kv.tree.Delete(key)
+}
+
+func (tx *KvTX) Set(key, val []byte) error {
+	return tx.kv.tree.Insert(key, val)
+}
+
+type kvStore interface {
+	Update(req *UpdateReq) (bool, error)
+	Del(key []byte) (bool, error)
+	Set(key, val []byte) error
+}
+
 func (kv *KV) Open() error {
 	kv.pager = &Pager{
 		fd: -1,
@@ -90,16 +173,13 @@ func (kv *KV) Del(key []byte) (bool, error) {
 	return deleted, err
 }
 
-func (kv *KV) Update(req *UpdateReq) error {
-	data := kv.meta.save()
-	err := kv.tree.Update(req)
-	if err != nil {
-		kv.sync(data)
-		kv.pager.page.nAppend = 0
-		kv.pager.page.updates = nil
-		return err
+func (kv *KV) Update(req *UpdateReq) (bool, error) {
+	meta := kv.meta.save()
+	if updated, err := kv.tree.Update(req); !updated {
+		return false, err
 	}
-	return updateOrRevert(kv, data)
+	err := updateOrRevert(kv, meta)
+	return err == nil, err
 }
 
 func updateOrRevert(kv *KV, data []byte) error {

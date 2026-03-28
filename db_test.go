@@ -23,7 +23,7 @@ func seedNextPrefix(t *testing.T, db *DB, nextPrefix uint32) {
 	var buf [4]byte
 	binary.BigEndian.PutUint32(buf[:], nextPrefix)
 	rec := (&Record{}).AddStr("key", []byte("next_prefix")).AddStr("val", buf[:])
-	if _, err := db.dbUpdate(TDefMeta, *rec, ModeUpsert); err != nil {
+	if _, err := db.dbUpdate(&db.kv, TDefMeta, *rec, ModeUpsert); err != nil {
 		t.Fatalf("seed next_prefix: %v", err)
 	}
 }
@@ -48,7 +48,7 @@ func registerTable(t *testing.T, db *DB, tDef *TableDef) {
 		t.Fatal(err)
 	}
 	rec := (&Record{}).AddStr("name", []byte(tDef.Name)).AddStr("def", defBytes)
-	if _, err = db.dbUpdate(TDefTable, *rec, ModeUpsert); err != nil {
+	if _, err = db.dbUpdate(&db.kv, TDefTable, *rec, ModeUpsert); err != nil {
 		t.Fatalf("register table %q: %v", tDef.Name, err)
 	}
 }

@@ -99,10 +99,10 @@ func (tree *BTree) Get(key []byte) ([]byte, bool) {
 	return treeGet(tree, tree.get(tree.root), key)
 }
 
-func (tree *BTree) Update(req *UpdateReq) error {
+func (tree *BTree) Update(req *UpdateReq) (bool, error) {
 	if tree.root == 0 {
 		if req.Mode == ModeUpdateOnly {
-			return fmt.Errorf("update error: row does not exists")
+			return false, fmt.Errorf("update error: row does not exists")
 		}
 		root := BNode(make([]byte, BTreePageSize))
 		root.setHeader(BNodeLeaf, 2)
@@ -110,14 +110,14 @@ func (tree *BTree) Update(req *UpdateReq) error {
 		nodeAppendKV(root, 1, 0, req.Key, req.Val)
 		tree.root = tree.new(root)
 		req.Added = true
-		return nil
+		return true, nil
 	}
 	newRoot, err := treeUpdate(tree, tree.get(tree.root), req)
 	if err != nil {
-		return err
+		return false, err
 	}
 	tree.commitRoot(newRoot)
-	return nil
+	return true, nil
 
 }
 
@@ -470,6 +470,127 @@ func treeUpdate(tree *BTree, node BNode, req *UpdateReq) (BNode, error) {
 	}
 
 	return newNode, nil
+}
+
+func freeSubtree(tree *BTree, ptr uint64) {
+	node := BNode(tree.get(ptr))
+	if node.bType() == BNodeNode {
+		for i := uint16(0); i < node.nKeys(); i++ {
+			freeSubtree(tree, node.getPtr(i))
+		}
+	}
+	tree.del(ptr)
+}
+
+func leafRangeDelete(newNode, old BNode, lo, hi []byte) {
+	count := uint16(0)
+	for i := uint16(0); i < old.nKeys(); i++ {
+		k := old.getKey(i)
+		if len(k) == 0 || bytes.Compare(k, lo) < 0 || bytes.Compare(k, hi) > 0 {
+			count++
+		}
+	}
+	newNode.setHeader(BNodeLeaf, count)
+	dst := uint16(0)
+	for i := uint16(0); i < old.nKeys(); i++ {
+		k := old.getKey(i)
+		if len(k) == 0 || bytes.Compare(k, lo) < 0 || bytes.Compare(k, hi) > 0 {
+			nodeAppendKV(newNode, dst, 0, k, old.getVal(i))
+			dst++
+		}
+	}
+}
+
+func nodeRangeDelete(tree *BTree, node BNode, lo, hi []byte) BNode {
+	left := nodeLookupLE(node, lo)
+	right := nodeLookupLE(node, hi)
+
+	for i := left + 1; i < right; i++ {
+		freeSubtree(tree, node.getPtr(i))
+	}
+
+	lPtr := node.getPtr(left)
+	lChild := treeRangeDelete(tree, BNode(tree.get(lPtr)), lo, hi)
+	tree.del(lPtr)
+
+	var rChild BNode
+	if right > left {
+		rPtr := node.getPtr(right)
+		rChild = treeRangeDelete(tree, BNode(tree.get(rPtr)), lo, hi)
+		tree.del(rPtr)
+	}
+
+	var kids []BNode
+	if lChild.nKeys() > 0 {
+		kids = append(kids, lChild)
+	}
+	if right > left && rChild.nKeys() > 0 {
+		if len(kids) > 0 && lChild.nBytes()+rChild.nBytes()-HeaderSize <= BTreePageSize {
+			merged := BNode(make([]byte, BTreePageSize))
+			nodeMerge(merged, kids[0], rChild)
+			kids[0] = merged
+		} else {
+			kids = append(kids, rChild)
+		}
+	}
+
+	nBefore := left
+	nAfter := node.nKeys() - right - 1
+	nNew := nBefore + uint16(len(kids)) + nAfter
+
+	newNode := BNode(make([]byte, BTreePageSize))
+	newNode.setHeader(BNodeNode, nNew)
+	nodeAppendRange(newNode, node, 0, 0, nBefore)
+	for i, kid := range kids {
+		nodeAppendKV(newNode, nBefore+uint16(i), tree.new(kid), kid.getKey(0), nil)
+	}
+	if nAfter > 0 {
+		nodeAppendRange(newNode, node, nBefore+uint16(len(kids)), right+1, nAfter)
+	}
+	return newNode
+}
+
+func treeRangeDelete(tree *BTree, node BNode, lo, hi []byte) BNode {
+	switch node.bType() {
+	case BNodeLeaf:
+		newNode := BNode(make([]byte, BTreePageSize))
+		leafRangeDelete(newNode, node, lo, hi)
+		return newNode
+	case BNodeNode:
+		return nodeRangeDelete(tree, node, lo, hi)
+	default:
+		panic("bad node type")
+	}
+}
+
+func (tree *BTree) RangeDelete(lo, hi []byte) error {
+	if err := checkLimit(lo, nil); err != nil {
+		return err
+	}
+	if err := checkLimit(hi, nil); err != nil {
+		return err
+	}
+	if bytes.Compare(lo, hi) > 0 {
+		return nil // empty range, nothing to do
+	}
+	if tree.root == 0 {
+		return nil
+	}
+
+	updated := treeRangeDelete(tree, BNode(tree.get(tree.root)), lo, hi)
+	tree.del(tree.root)
+
+	switch {
+	case updated.nKeys() == 0:
+		tree.root = 0
+	case updated.bType() == BNodeLeaf && updated.nKeys() == 1:
+		tree.root = 0 // only the sentinel remains — tree is empty
+	case updated.bType() == BNodeNode && updated.nKeys() == 1:
+		tree.root = updated.getPtr(0) // collapse single-child internal node
+	default:
+		tree.root = tree.new(updated)
+	}
+	return nil
 }
 
 func iterNext(iter *BIter, level int) {
