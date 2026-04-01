@@ -14,6 +14,9 @@ type FreeList struct {
 	tailPage uint64
 	tailSeq  uint64
 	maxSeq   uint64 //saved "tail sequence" to prevent consuming newly added items
+
+	maxVer uint64 // the oldest reader version
+	curVer uint64 // version number when committing
 }
 
 func (l LNode) getNext() uint64 {

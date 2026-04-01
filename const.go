@@ -23,6 +23,11 @@ const (
 	CmpLE = -3
 )
 
+const (
+	FlagDeleted = byte(1)
+	FlagUpdated = byte(2)
+)
+
 const HeaderSize = 4
 const BTreePageSize = 4096
 const BTreeMaxKeySize = 1000

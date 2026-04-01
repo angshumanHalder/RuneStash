@@ -78,13 +78,13 @@ func TestKV_Update_ModeInsertOnly(t *testing.T) {
 	defer db.Close()
 
 	req := &UpdateReq{Key: []byte("k1"), Val: []byte("v1"), Mode: ModeInsertOnly}
-	if err := db.Update(req); err != nil || !req.Added {
+	if _, err := db.Update(req); err != nil || !req.Added {
 		t.Fatalf("expected successful insert, got added=%v err=%v", req.Added, err)
 	}
 
 	// duplicate insert must fail
 	req2 := &UpdateReq{Key: []byte("k1"), Val: []byte("v2"), Mode: ModeInsertOnly}
-	if err := db.Update(req2); err == nil {
+	if _, err := db.Update(req2); err == nil {
 		t.Fatal("expected duplicate key error, got nil")
 	}
 
@@ -110,7 +110,7 @@ func TestKV_Update_ModeUpdateOnly(t *testing.T) {
 
 	// updating a non-existent key must fail
 	ghost := &UpdateReq{Key: []byte("ghost"), Val: []byte("val"), Mode: ModeUpdateOnly}
-	if err := db.Update(ghost); err == nil {
+	if _, err := db.Update(ghost); err == nil {
 		t.Fatal("expected error updating non-existent key")
 	}
 
@@ -119,7 +119,7 @@ func TestKV_Update_ModeUpdateOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := &UpdateReq{Key: []byte("k1"), Val: []byte("new"), Mode: ModeUpdateOnly}
-	if err := db.Update(req); err != nil || req.Added {
+	if _, err := db.Update(req); err != nil || req.Added {
 		t.Fatalf("expected update ok with Added=false, got added=%v err=%v", req.Added, err)
 	}
 
@@ -139,13 +139,13 @@ func TestKV_Update_ModeUpsert(t *testing.T) {
 
 	// upsert on new key → insert, Added=true
 	req := &UpdateReq{Key: []byte("k1"), Val: []byte("v1"), Mode: ModeUpsert}
-	if err := db.Update(req); err != nil || !req.Added {
+	if _, err := db.Update(req); err != nil || !req.Added {
 		t.Fatalf("expected insert on upsert, got added=%v err=%v", req.Added, err)
 	}
 
 	// upsert on existing key → update, Added=false
 	req2 := &UpdateReq{Key: []byte("k1"), Val: []byte("v2"), Mode: ModeUpsert}
-	if err := db.Update(req2); err != nil || req2.Added {
+	if _, err := db.Update(req2); err != nil || req2.Added {
 		t.Fatalf("expected update on upsert, got added=%v err=%v", req2.Added, err)
 	}
 

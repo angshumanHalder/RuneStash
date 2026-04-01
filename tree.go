@@ -30,6 +30,89 @@ type BIter struct {
 	pos  []uint16
 }
 
+type CombinedIter struct {
+	top *BIter // KvTX.pending  (writes buffered in this TX)
+	bot *BIter // KvTX.snapshot (frozen base state)
+}
+
+func NewCombinedIter(top, bot *BIter) *CombinedIter {
+	ci := &CombinedIter{top: top, bot: bot}
+	ci.skipDeleted()
+	return ci
+}
+
+func (ci *CombinedIter) topKey() []byte {
+	if !ci.top.Valid() {
+		return nil
+	}
+	k, _ := ci.top.Deref()
+	return k
+}
+
+func (ci *CombinedIter) botKey() []byte {
+	if !ci.bot.Valid() {
+		return nil
+	}
+	k, _ := ci.bot.Deref()
+	return k
+}
+
+func (ci *CombinedIter) compare() int {
+	tk := ci.topKey()
+	bk := ci.botKey()
+	if tk == nil && bk == nil {
+		return 0
+	}
+	if tk == nil {
+		return 1
+	}
+	if bk == nil {
+		return -1
+	}
+	return bytes.Compare(tk, bk)
+}
+
+func (ci *CombinedIter) skipDeleted() {
+	for ci.top.Valid() {
+		_, v := ci.top.Deref()
+		if v[0] != FlagDeleted {
+			break // top points at a real (non-deleted) entry
+		}
+		// consume this tombstone; if bot has the same key, skip it too
+		if cmp := ci.compare(); cmp == 0 {
+			ci.bot.Next()
+		}
+		ci.top.Next()
+	}
+}
+
+func (ci *CombinedIter) Valid() bool {
+	return ci.top.Valid() || ci.bot.Valid()
+}
+
+func (ci *CombinedIter) Deref() ([]byte, []byte) {
+	cmp := ci.compare()
+	if cmp <= 0 {
+		k, v := ci.top.Deref()
+		return k, v[1:] // strip FlagUpdated
+	}
+	return ci.bot.Deref()
+}
+
+func (ci *CombinedIter) Next() {
+	cmp := ci.compare()
+	switch {
+	case cmp < 0:
+		ci.top.Next()
+	case cmp > 0:
+		ci.bot.Next()
+	default: // same key in both: advance both
+		ci.top.Next()
+		ci.bot.Next()
+	}
+	ci.skipDeleted()
+}
+
 func (tree *BTree) commitRoot(node BNode) {
 	tree.del(tree.root)
 	nSplit, split := nodeSplit3(node)
@@ -149,6 +232,9 @@ func (tree *BTree) SeekLE(key []byte) *BIter {
 }
 
 func (tree *BTree) Seek(key []byte, cmp int) *BIter {
+	if tree.root == 0 {
+		return &BIter{tree: tree} // empty tree: Valid() == false
+	}
 	iter := tree.SeekLE(key)
 	leaf := iter.path[len(iter.path)-1]
 	cur := leaf.getKey(iter.pos[len(iter.pos)-1])

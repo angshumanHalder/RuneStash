@@ -137,7 +137,7 @@ func (c *C) Del(key string) {
 
 func (c *C) UpdateWith(key, val string, mode int) (*UpdateReq, error) {
 	req := &UpdateReq{Key: []byte(key), Val: []byte(val), Mode: mode}
-	err := c.tree.Update(req)
+	_, err := c.tree.Update(req)
 	if err == nil {
 		if req.Added {
 			c.ref[key] = val

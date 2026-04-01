@@ -79,9 +79,9 @@ func (p *Pager) pageRead(ptr uint64) []byte {
 	return p.pageReadFile(ptr)
 }
 
-func (p *Pager) pageReadFile(ptr uint64) []byte {
+func mmapRead(ptr uint64, chunks [][]byte) []byte {
 	start := uint64(0)
-	for _, chunk := range p.mmap.chunks {
+	for _, chunk := range chunks {
 		end := start + uint64(len(chunk))/BTreePageSize
 		if ptr < end {
 			offset := BTreePageSize * (ptr - start)
@@ -89,7 +89,11 @@ func (p *Pager) pageReadFile(ptr uint64) []byte {
 		}
 		start = end
 	}
-	panic("pageReadFile: page not found")
+	panic("mmapRead: page not found")
+}
+
+func (p *Pager) pageReadFile(ptr uint64) []byte {
+	return mmapRead(ptr, p.mmap.chunks)
 }
 
 func (p *Pager) pageWrite(ptr uint64) []byte {
