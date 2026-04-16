@@ -14,6 +14,31 @@ type DB struct {
 	kv   KV
 }
 
+// Open opens the KV store and bootstraps internal tables on a new DB.
+func (db *DB) Open() error {
+	db.kv.Path = db.Path
+	if err := db.kv.Open(); err != nil {
+		return err
+	}
+	// check if next_prefix already exists
+	rec := (&Record{}).AddStr("key", []byte("next_prefix"))
+	ok, err := db.dbGet(TDefMeta, rec)
+	if err != nil {
+		return fmt.Errorf("bootstrap check: %w", err)
+	}
+	if ok {
+		return nil
+	}
+	// new DB: seed next_prefix = 3 (prefixes 1,2 reserved for internal tables)
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], 3)
+	seed := (&Record{}).AddStr("key", []byte("next_prefix")).AddStr("val", buf[:])
+	if _, err = db.dbUpdate(&db.kv, TDefMeta, *seed, ModeInsertOnly); err != nil {
+		return fmt.Errorf("bootstrap next_prefix: %w", err)
+	}
+	return nil
+}
+
 type DbTX struct {
 	kv KvTX
 	db *DB
@@ -330,11 +355,12 @@ func (db *DB) dbDelete(kv kvStore, tDef *TableDef, rec Record) (bool, error) {
 func dbScan(db *DB, tDef *TableDef, req *Scanner) error {
 	indexes := tableIndexes(tDef)
 
-	isCovered := func(index []string) bool {
-		key := req.Key1.Cols
-		return len(index) >= len(key) && slices.Equal(index[:len(key)], key)
+	covered := func(key []string, index []string) bool {
+		return len(key) == 0 || (len(index) >= len(key) && slices.Equal(index[:len(key)], key))
 	}
-	req.index = slices.IndexFunc(indexes, isCovered)
+	req.index = slices.IndexFunc(indexes, func(index []string) bool {
+		return covered(req.Key1.Cols, index) && covered(req.Key2.Cols, index)
+	})
 	if req.index < 0 {
 		return fmt.Errorf("no index covers the query columns")
 	}

@@ -226,6 +226,9 @@ func (tree *BTree) SeekLE(key []byte) *BIter {
 		idx := nodeLookupLE(node, key)
 		iter.path = append(iter.path, node)
 		iter.pos = append(iter.pos, idx)
+		if BNode(node).bType() == BNodeLeaf {
+			break
+		}
 		ptr = BNode(node).getPtr(idx)
 	}
 	return iter
